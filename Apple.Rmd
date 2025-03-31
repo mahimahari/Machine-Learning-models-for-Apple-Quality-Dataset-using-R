@@ -1,0 +1,613 @@
+---
+title: "apple"
+output:
+  html_document: default
+  pdf_document: default
+date: "2025-03-02"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+#APPLE QUALITY CLASSIFIER USING R
+
+There are 4,001 entries in the Apple Quality Data set taken from Kaggle, and each one describes a different feature of a single apple.
+The dataset comprises several key attributes:
+
+A_id (Apple ID): Each apple’s unique identifier.
+Size: Reflects the physical dimensions or volume.
+Weight: Mass of each apple, typically measured in grams.
+Quality Attributes:
+Sweetness: Based on sugar content.
+Crunchiness: Assessed via mechanical testing.
+Juiciness: Evaluated by juice yield.
+Ripeness: Determined through firmness or biochemical markers.
+Acidity: Acid content affecting flavor.
+Quality: Overall quality classification into ‘good’ or ‘bad’.
+
+
+## Importing libraries
+The machine learning models in R, we use the caret package. ggplot2 and gridExtra are used for creating plot and data visualizations. corrplot is for correlation plots
+
+To install any package install.packages("package_name")
+
+```{r}
+library(caret)
+library(dplyr)
+library(ggplot2)
+library(gridExtra)
+library(corrplot)
+library(ClusterR)
+library(cluster)
+library(clue)
+library(class)
+library(factoextra) 
+library(tidyverse)
+library(pROC)
+library(rpart)  # For CART
+library(randomForest)
+```
+## Uploading dataset
+The data set is an open-source data set taken from kaggle https://www.kaggle.com/datasets/nelgiriyewithana/apple-quality. Here, we have manually downloaded the data set and uploaded it using read.csv.You can replace "your_dataset_location.csv" with the actual path to your data set file.
+
+
+```{r}
+apple_quality <- read.csv("/cloud/project/apple_quality.csv")
+apple_quality
+```
+##3.Exploratory Data Analysis
+Let’s do some data analysis on out apple quality data set that we have.
+
+First,let’s us see the summary of out dataset.
+```{r}
+summary(apple_quality)
+```
+
+```{r}
+
+col_values <- sapply(apple_quality, function(x) length(x))
+print(col_values)
+
+```
+To check the total number of values in each column,So, we can conclude that each column has same number of values but we also need to check if there are any missing values in each columns.
+
+```{r}
+missing_values <- colSums(is.na(apple_quality))
+missing_values
+```
+There is 1 missing value.
+
+```{r}
+apple_quality <- na.omit(apple_quality)
+missing_values <- colSums(is.na(apple_quality))
+print(missing_values)
+```
+We can see the last row of the dataset is not helpful for us as it just contains the details of author of the data set. So, we can drop the last row and also we check the missing values again after removing the rows.
+
+```{r}
+duplicated_rows <- duplicated(apple_quality)
+
+# Count the total number of duplicate rows
+total_duplicates <- sum(duplicated_rows)
+
+# Print the count of duplicate rows
+print(total_duplicates)
+```
+
+We can also remove column A_id as it does not add any valuable information.
+
+
+```{r}
+apple_quality <- apple_quality[, !(names(apple_quality) == "A_id")]
+head(apple_quality)
+```
+
+We can see the datatypes of each column and the values of column Acidity is in double but the datatype of Acidity is in character. So we can convert the datatype of Acidity to double. We also check for any missing values after our type conversion.
+
+```{r}
+# converting type of Acidity to double
+apple_quality$Acidity <- as.numeric(apple_quality$Acidity)
+print(typeof(apple_quality$Acidity))
+
+# Checking if there are any missing values in each columns
+missing_values <- colSums(is.na(apple_quality))
+print(missing_values)
+
+```
+##Analyzing values in each feature
+First let us convert the column Quality from character to binary like giving values to GOOD = 1 and BAD = 0. Converting it to binary will be useful for further data analysis.
+
+
+
+```{r}
+library(dplyr)
+library(ggplot2)
+
+# Create a table of counts
+quality_counts <- table(apple_quality$Quality)
+
+# Convert to a data frame
+quality_counts_df <- as.data.frame(quality_counts) %>%
+  rename(Quality = Var1, Count = Freq) %>%  # Rename columns properly
+  mutate(Percentage = round(Count / sum(Count) * 100, 1),  # Calculate percentages
+         Label = paste0(Count, " (", Percentage, "%)"))   # Create label with count & percentage
+
+# Create a pie chart with labels
+ggplot(quality_counts_df, aes(x = "", y = Count, fill = factor(Quality))) +
+  geom_bar(stat = "identity", width = 1, color = "black") +  # Create bar chart
+  coord_polar(theta = "y") +  # Convert to pie chart
+  scale_fill_manual(values = c("good" = "red", "bad" = "blue")) +  # Custom colors
+  labs(title = "Quality Distribution", fill = "Quality") +
+  theme_void() +  # Remove background grid and axes
+  geom_text(aes(label = Label), position = position_stack(vjust = 0.5), size = 5, color = "white") 
+
+
+
+```
+
+```{r}
+apple_quality$Quality <- ifelse(apple_quality$Quality == "good", 1, 0)
+```
+
+Analysing the distribution of each features.
+
+```{r}
+plots_list <- list()
+
+plot_distribution <- function(data, col_name) {
+  if(is.numeric(data[[col_name]])) {
+    ggplot(data, aes(x = !!sym(col_name))) +
+      geom_histogram(binwidth = 0.5, fill = "skyblue", color = "black") +
+      labs(title = paste("Distribution of", col_name),
+           x = col_name,
+           y = "Frequency")
+  } else {
+    ggplot(data, aes(x = factor(!!sym(col_name)))) +
+      geom_bar(fill = "skyblue", color = "black") +
+      labs(title = paste("Distribution of", col_name),
+           x = col_name,
+           y = "Frequency")
+  }
+}
+
+for (col_name in names(apple_quality)) {
+  plots_list[[col_name]] <- plot_distribution(apple_quality, col_name)
+}
+
+grid.arrange(grobs = plots_list, ncol = 3)
+```
+
+Plotting correlation matrix for all numeric columns in our data set.
+
+
+```{r}
+correlation_matrix <- cor(apple_quality)
+corrplot(correlation_matrix, method = 'square', order = 'AOE', addCoef.col = 'black',
+         tl.pos = 'd', cl.pos = 'n', 
+         col = colorRampPalette(c("darkblue", "white", "darkred"))(200))
+
+```
+
+
+Finding the outliers
+
+```{r}
+par(mfrow = c(2, 4))
+for (col in colnames(apple_quality)) {
+  if (col == 'Quality') next
+  boxplot(as.formula(paste(col, '~Quality')), data=apple_quality)
+}
+```
+```{r}
+str(apple_quality)
+```
+## 5. Modelling
+Let us separate the feature and target variables in our data set. We know that the Quality is our target variable.
+
+
+```{r}
+target_variable <- apple_quality[, ncol(apple_quality)]
+cat("Shape of target_variable: ", length(target_variable), "\n")
+```
+
+```{r}
+feature_variables <- apple_quality[, -ncol(apple_quality)]
+
+shape_feature_variables <- dim(feature_variables)
+cat("Shape of feature_variables:", shape_feature_variables, "\n")
+
+```
+```{r}
+target_variable <- as.factor(target_variable)
+apple_quality[, ncol(apple_quality)] <- target_variable
+```
+
+
+
+Splitting the data set into training and test set is an important step for applying out learning models.
+
+```{r}
+# Load necessary library
+library(caret)
+
+# Set seed for reproducibility
+SEED <- 42
+set.seed(SEED)
+
+# Assume X and y are predefined (features and target variable)
+# Splitting data into 80% train and 20% test
+train_index <- createDataPartition(target_variable, p = 0.8, list = FALSE)
+X_train <- feature_variables[train_index, ]
+y_train <- target_variable[train_index]
+X_test <- feature_variables[-train_index, ]
+y_test <- target_variable[-train_index]
+
+# Splitting the train set into 80% train and 20% validation
+train_index_val <- createDataPartition(y_train, p = 0.8, list = FALSE)
+X_train_final <- X_train[train_index_val, ]
+y_train_final <- y_train[train_index_val]
+X_val <- X_train[-train_index_val, ]
+y_val <- y_train[-train_index_val]
+
+# Print dataset shapes
+cat("X_train shape: ", dim(X_train_final), "\n")
+cat("X_val shape: ", dim(X_val), "\n")
+cat("X_test shape: ", dim(X_test), "\n")
+
+# Print target variable distribution
+cat("\nY train value counts:\n")
+print(table(y_train_final))
+cat('----------------\n')
+
+cat("Y validation value counts:\n")
+print(table(y_val))
+cat('----------------\n')
+
+cat("Y test value counts:\n")
+print(table(y_test))
+cat('----------------\n')
+
+```
+
+##BASELINE MODEL
+
+KNN is a simple algorithm which classifies or predicts how a single data point will be grouped based on proximity. We do hyper-parameter tuning to see which K value performs well. We take values as k = 1:10. We can see the accuracies are stable with the values of k=6,7,8. So we can take the optimal value of k=7.
+
+
+
+
+```{r}
+# Load necessary libraries
+library(caret)
+library(ggplot2)
+library(pROC)  # For ROC curve
+
+# Set seed for reproducibility
+SEED <- 42
+set.seed(SEED)
+
+# Assume apple_quality is predefined and contains features & target variable
+target_variable <- as.factor(apple_quality[, ncol(apple_quality)])  # Ensure target is a factor
+feature_variables <- apple_quality[, -ncol(apple_quality)]  # Extract features
+
+# Split data into 80% train and 20% test
+train_index <- createDataPartition(target_variable, p = 0.8, list = FALSE)
+train_data <- apple_quality[train_index, ]
+test_data <- apple_quality[-train_index, ]
+
+# Further split train data into 80% train and 20% validation
+train_index_val <- createDataPartition(train_data$Quality, p = 0.8, list = FALSE)
+val_data <- train_data[-train_index_val, ]  # Validation set
+train_data <- train_data[train_index_val, ]  # Updated train set
+
+# Print dataset shapes
+cat("Train Data Shape: ", dim(train_data), "\n")
+cat("Validation Data Shape: ", dim(val_data), "\n")
+cat("Test Data Shape: ", dim(test_data), "\n")
+
+# Print target variable distribution
+cat("\nTrain Data Class Distribution:\n")
+print(table(train_data$Quality))
+cat("----------------\n")
+
+cat("Validation Data Class Distribution:\n")
+print(table(val_data$Quality))
+cat("----------------\n")
+
+cat("Test Data Class Distribution:\n")
+print(table(test_data$Quality))
+cat("----------------\n")
+
+# Ensure the target variable is a factor
+train_data$Quality <- as.factor(train_data$Quality)
+test_data$Quality <- as.factor(test_data$Quality)
+
+# Define cross-validation control
+train_control <- trainControl(method = "cv", number = 10)  # 10-fold CV
+
+# Train KNN model with tuning over k = 1 to 10
+knn_results <- train(Quality ~ ., 
+                     data = train_data, 
+                     method = "knn",
+                     trControl = train_control,
+                     preProcess = "scale",  # Standardize features
+                     tuneGrid = expand.grid(k = 1:10))
+
+# Extract results (accuracies and k values)
+results <- knn_results$results
+plot_data <- data.frame(k = results$k, Accuracy = results$Accuracy)
+
+# Print accuracies for each k
+print(plot_data)
+
+# Plot accuracy vs. k
+ggplot(plot_data, aes(x = k, y = Accuracy)) +
+  geom_line(color = "blue") +
+  geom_point(color = "red", size = 3) +
+  labs(title = "KNN Accuracy for Different K Values",
+       x = "Number of Neighbors (K)",
+       y = "Accuracy") +
+  theme_minimal()
+
+# Train final KNN model using k = 7
+knn_model <- train(Quality ~ ., 
+                   data = train_data, 
+                   method = "knn",
+                   trControl = train_control,
+                   preProcess = "scale",  # Ensure features are scaled
+                   tuneGrid = data.frame(k = 7))  # Using k = 7
+
+# Make predictions on test data
+predictions <- predict(knn_model, newdata = test_data)
+accuracy <- mean(predictions == test_data$Quality)  # Compute accuracy
+
+cat("Accuracy of the KNN model with k=7: ", round(accuracy * 100, 2), "%\n")
+
+# Compute confusion matrix
+conf_matrix <- table(Predicted = predictions, Actual = test_data$Quality)
+print(conf_matrix)
+
+# Compute Precision, Recall, and F1-Score
+tp <- sum(predictions == test_data$Quality & test_data$Quality == levels(test_data$Quality)[2])  # True Positives
+fp <- sum(predictions != test_data$Quality & predictions == levels(test_data$Quality)[2])  # False Positives
+fn <- sum(predictions != test_data$Quality & test_data$Quality == levels(test_data$Quality)[2])  # False Negatives
+
+precision <- ifelse(tp + fp == 0, 0, tp / (tp + fp))
+recall <- ifelse(tp + fn == 0, 0, tp / (tp + fn))
+f1_score <- ifelse(precision + recall == 0, 0, 2 * (precision * recall) / (precision + recall))
+
+cat("Precision:", round(precision, 4), "\n")
+cat("Recall:", round(recall, 4), "\n")
+cat("F1 Score:", round(f1_score, 4), "\n")
+
+# Compute and plot ROC curve
+roc_curve <- roc(test_data$Quality, as.numeric(predictions))
+plot(roc_curve, main = "ROC Curve for KNN Model", col = "blue", lwd = 2)
+
+```
+
+KNN performs very well with the accuracy of 88 to 90% on our test_data
+
+
+```{r}
+library(caret)
+
+# Set up training control for cross-validation
+train_control <- trainControl(method = "cv", number = 5)
+
+# Initialize the classifiers list
+classifiers <- list()
+
+# Logistic Regression
+set.seed(42)
+logit_model <- train(Quality ~ ., data = train_data, method = "glm", 
+                     family = "binomial",  # Logistic Regression
+                     trControl = train_control,
+                     preProcess = c("center", "scale"))
+classifiers[["Logistic Regression"]] <- logit_model
+
+# Support Vector Machine (SVM)
+set.seed(42)
+svm_model <- train(Quality ~ ., data = train_data, method = "svmRadial",
+                   trControl = train_control,
+                   preProcess = c("center", "scale"),
+                   tuneLength = 5)
+classifiers[["SVM"]] <- svm_model
+
+# Decision Tree
+set.seed(42)
+dt_model <- train(Quality ~ ., data = train_data, method = "rpart",
+                  trControl = train_control,
+                  preProcess = c("center", "scale"))
+classifiers[["Decision Tree"]] <- dt_model
+
+# Random Forest
+set.seed(42)
+rf_model <- train(Quality ~ ., data = train_data, method = "rf",
+                  trControl = train_control,
+                  preProcess = c("center", "scale"),
+                  tuneLength = 5)
+classifiers[["Random Forest"]] <- rf_model
+
+cat("✅ All models trained and stored in the 'classifiers' list.\n")
+
+
+```
+
+
+
+
+```{r}
+library(caret)
+
+# Check if classifiers exist
+if (!exists("classifiers") || length(classifiers) == 0) {
+  stop("Error: The 'classifiers' object is not found. Train models and store them in the 'classifiers' list before running this script.")
+}
+
+# Initialize empty data frames
+sorted_classifiers <- data.frame(Model = character(), Accuracy = numeric(), F1_Score = numeric(), stringsAsFactors = FALSE)
+test_sorted_classifiers <- data.frame(Model = character(), Test_Accuracy = numeric(), Test_F1_Score = numeric(), stringsAsFactors = FALSE)
+
+for (model_name in names(classifiers)) {
+  model <- classifiers[[model_name]]
+  
+  #  Predict on validation set
+  y_val_pred <- predict(model, newdata = val_data)
+  val_accuracy <- mean(y_val_pred == val_data$Quality)
+
+  #  Compute F1-score for validation set
+  val_conf_matrix <- confusionMatrix(as.factor(y_val_pred), as.factor(val_data$Quality))
+  val_f1_score <- ifelse(!is.null(val_conf_matrix$byClass["F1"]), 
+                         val_conf_matrix$byClass["F1"], 
+                         mean(val_conf_matrix$byClass[, "F1"]))  # Handle multiple classes
+
+  cat("\n----------------", model_name, "----------------\n")
+  cat("Validation Accuracy:", round(val_accuracy, 3), "\n")
+  cat("Validation F1-Score:", round(val_f1_score, 3), "\n")
+
+  # Store validation results
+  sorted_classifiers <- rbind(sorted_classifiers, data.frame(Model = model_name, Accuracy = val_accuracy, F1_Score = val_f1_score))
+
+  # Predict on test set
+  y_test_pred <- predict(model, newdata = test_data)
+  test_accuracy <- mean(y_test_pred == test_data$Quality)
+
+  #  Compute F1-score for test set
+  test_conf_matrix <- confusionMatrix(as.factor(y_test_pred), as.factor(test_data$Quality))
+  test_f1_score <- ifelse(!is.null(test_conf_matrix$byClass["F1"]), 
+                          test_conf_matrix$byClass["F1"], 
+                          mean(test_conf_matrix$byClass[, "F1"]))  # Handle multiple classes
+
+  cat("Test Accuracy:", round(test_accuracy, 3), "\n")
+  cat("Test F1-Score:", round(test_f1_score, 3), "\n")
+
+  # Store test results
+  test_sorted_classifiers <- rbind(test_sorted_classifiers, data.frame(Model = model_name, Test_Accuracy = test_accuracy, Test_F1_Score = test_f1_score))
+}
+
+# Sort classifiers by validation accuracy
+sorted_classifiers <- sorted_classifiers[order(-sorted_classifiers$Accuracy), ]
+cat("\n🔹 Sorted Classifiers by Validation Accuracy:\n")
+print(sorted_classifiers)
+
+#  Sort classifiers by test accuracy
+test_sorted_classifiers <- test_sorted_classifiers[order(-test_sorted_classifiers$Test_Accuracy), ]
+cat("\n🔹 Sorted Classifiers by Test Accuracy:\n")
+print(test_sorted_classifiers)
+
+```
+
+
+##MULTIPLE CLASSIFIERS MODEL BUILDING
+Four different classifier such as logisitic regression,Decision tree,Random forest and SVM were used to see the model performance in various aspects accuracy and F1 score were taken as evaluation metrics.
+
+
+From the performance we can state that though random forest performance really well giving 100% accuracy in validation set but fails perform well in test set this might due it it tends to overfit at times,but SVM performs well in both train and test set.Selecting SVM as the best model for classification.
+
+
+## SVM Hyperparameter tuning
+
+
+
+```{r}
+# Load required libraries
+library(caret)
+library(e1071)
+
+# Set seed for reproducibility
+set.seed(42)
+
+# Define parameter grid for 'C' and 'sigma' hyperparameter tuning
+param_grid <- expand.grid(
+  C = c(0.1, 1, 10, 100),  # Cost parameter
+  sigma = c(0.1, 0.5, 1, 2)  # Sigma values for the RBF kernel
+)
+
+# Train an SVM model with cross-validation and tune hyperparameters 'C' and 'sigma'
+svm_tune <- train(Quality ~ ., data = data.frame(X_train, Quality = y_train),
+                  method = "svmRadial", 
+                  trControl = trainControl(method = "cv", number = 5),
+                  tuneGrid = param_grid,
+                  preProcess = c("center", "scale"))
+
+# Best model and parameters
+cat("Best C Value:", svm_tune$bestTune$C, "\n")
+cat("Best Sigma Value:", svm_tune$bestTune$sigma, "\n")
+cat("Best Model Accuracy (Training):", svm_tune$results$Accuracy[which.min(svm_tune$results$Resample)], "\n")
+
+# Predict on test set using the best model
+y_test_pred <- predict(svm_tune, newdata = data.frame(X_test))
+
+# Calculate accuracy
+test_accuracy <- mean(y_test_pred == y_test)
+cat("Test Accuracy:", round(test_accuracy, 3), "\n")
+
+# Generate confusion matrix
+conf_matrix <- confusionMatrix(as.factor(y_test_pred), as.factor(y_test))
+print(conf_matrix)
+
+
+
+```
+
+
+By tuning the hyperparameter we get the best C value=1 by improving the accuarcy by 91%.
+
+```{r}
+library(ggplot2)
+
+# Ensure both data frames have the same column names
+colnames(test_sorted_classifiers) <- colnames(sorted_classifiers)
+
+# Add a column to distinguish Validation vs Test
+sorted_classifiers$Type <- "Validation"
+test_sorted_classifiers$Type <- "Test"
+
+# Combine both data frames
+accuracy_data <- rbind(sorted_classifiers, test_sorted_classifiers)
+
+# Plot the bar chart
+ggplot(accuracy_data, aes(x = reorder(Model, -Accuracy), y = Accuracy, fill = Type)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Model Accuracy Comparison", x = "Model", y = "Accuracy") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_fill_manual(values = c("Validation" = "blue", "Test" = "red"))
+
+
+```
+## ROC CURVE
+
+```{r}
+library(pROC)
+
+# Set up a 2x2 grid for subplots (adjust based on number of models)
+par(mfrow = c(2, 2))  
+
+# Loop through models and plot ROC curves in separate subplots
+for (model_name in names(classifiers)) {
+  model <- classifiers[[model_name]]
+  
+  # Get probabilities or convert labels to numeric
+  if ("prob" %in% names(predict(model, X_test, type = "raw"))) {
+    y_test_prob <- predict(model, X_test, type = "prob")[, 2]  # Probability for class 1
+  } else {
+    y_test_prob <- as.numeric(predict(model, X_test))  # Convert class labels to numeric
+  }
+  
+  # Convert y_test to numeric (0/1)
+  y_test_numeric <- as.numeric(as.factor(y_test)) - 1  
+  
+  # Compute ROC
+  roc_curve <- roc(y_test_numeric, y_test_prob)
+  
+  # Plot ROC Curve
+  plot(roc_curve, col = "blue", main = paste("ROC Curve for", model_name), lwd = 2)
+  #abline(a = 0, b = 1, col = "gray", lty = 2)  # Diagonal baseline
+}
+
+
+
+```
+To summarize, The binary classification approach to some extend provides decent assessments.The chosen metrics, including accuracy, confusion matrix, F1 score, ROC curves, offered a comprehensive evaluation of model performance.The ROC curves provided insights into the models' discriminatory abilities.We can see SVM performs well with better Accuracy and F1 score.The evaluation metrics and sensitivity analysis are based on a specific threshold.
